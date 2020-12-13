@@ -8,7 +8,6 @@
 module Clipboard where
 
 import           Protolude                hiding ((<&>))
-import           Unsafe                   (unsafeIndex)
 
 import           Graphics.X11.Xlib
 import           Graphics.X11.Xlib.Extras
@@ -16,6 +15,7 @@ import           Graphics.X11.Xlib.Extras
 import           Control.Concurrent       (threadDelay)
 import           Data.Binary              (Binary)
 import qualified Data.ByteString          as B
+import           Data.String              (String)
 import           Lens.Micro
 
 import           System.Directory         (setCurrentDirectory)
@@ -158,10 +158,10 @@ getSelection ctx@XorgContext{..} clipboard = do
      in fromMaybe defaultMime selectedMime
 
    mimeToSelectionType mimeTarget selContent =
-     if      mimeTarget == unsafeIndex mimesPriorities 0 then PNG selContent
-     else if mimeTarget == unsafeIndex mimesPriorities 1 then JPEG selContent
-     else if mimeTarget == unsafeIndex mimesPriorities 2 then BITMAP selContent
-     else UTF8 $ toS selContent
+     if      Just mimeTarget == atMay mimesPriorities 0 then PNG selContent
+     else if Just mimeTarget == atMay mimesPriorities 1 then JPEG selContent
+     else if Just mimeTarget == atMay mimesPriorities 2 then BITMAP selContent
+     else UTF8 $ decodeUtf8 selContent
 
    -- getContentIncrementally acc = do
    --   _ <- xDeleteProperty display ownWindow selectionTarget
@@ -229,7 +229,7 @@ setClipboardSelection sel = void $ forkProcess $ do
           return ()
 
 
-selectionTypeToMime :: SelectionType -> ByteString
+selectionTypeToMime :: SelectionType -> String
 selectionTypeToMime (PNG _)    = "image/png"
 selectionTypeToMime (JPEG _)   = "image/jpeg"
 selectionTypeToMime (BITMAP _) = "image/bmp"
@@ -239,7 +239,7 @@ getContent :: SelectionType -> ByteString
 getContent (PNG bytes)    = bytes
 getContent (JPEG bytes)   = bytes
 getContent (BITMAP bytes) = bytes
-getContent (UTF8 txt)     = toS txt
+getContent (UTF8 txt)     = encodeUtf8 txt
 
 advertiseSelection :: XorgContext -> Selection ->  IO ()
 advertiseSelection ctx@XorgContext{..} sel = allocaXEvent (go [defaultClipboard, primaryClipboard])

@@ -13,7 +13,9 @@ import           Protolude             hiding (readFile, to, (<&>), (&))
 
 import           Control.Monad.Catch   (MonadCatch, catchAll)
 import           Data.Binary           (decodeFile, encode)
+import qualified Data.ByteString.Lazy  as LazyBytes
 import qualified Data.ByteString       as B
+import qualified Data.ByteString.Char8 as CharBytes
 import           Data.Hashable         (hash)
 import           Data.List             (dropWhileEnd)
 import qualified Data.Text             as T
@@ -22,7 +24,7 @@ import qualified Data.Vector           as V
 import           Lens.Micro
 import           Lens.Micro.Mtl
 import qualified System.Directory      as Dir
-import           System.Posix.Files    (setFileMode)
+import           System.Posix.Files    (setFileMode) 
 import           System.Environment    (lookupEnv)
 import           System.IO             (IOMode (..), hClose, hGetContents,
                                         openFile)
@@ -49,7 +51,7 @@ type ClipHistory = Vector Clip.Selection
 readFile :: FilePath -> IO ByteString
 readFile filepath = bracket (openFile filepath ReadMode) hClose $ \h -> do
   str <- hGetContents h
-  return $! toS str
+  return $! CharBytes.pack str
 
 
 getHistory :: (MonadIO m, MonadReader Config m) => m ClipHistory
@@ -63,7 +65,7 @@ getStaticHistory = do
   storePath <- view $ to (toS . staticHistoryPath)
   liftIO $ readH storePath `catchAll` const mempty
   where
-    readH filePath = readFile filePath <&> V.fromList . fmap toSelection . T.lines . toS
+    readH filePath = readFile filePath <&> V.fromList . fmap toSelection . T.lines . decodeUtf8
     toSelection txt = Clip.Selection "greenclip" (Clip.UTF8 txt)
 
 
@@ -72,7 +74,7 @@ storeHistory history = do
   storePath <- view $ to (toS . historyPath)
   liftIO $ writeH storePath history
   where
-    writeH storePath = B.writeFile storePath . toS . encode . V.toList
+    writeH storePath = B.writeFile storePath .  LazyBytes.toStrict . encode . V.toList
 
 
 appendToHistory :: (MonadIO m, MonadReader Config m) => Clip.Selection -> ClipHistory -> m (ClipHistory, ClipHistory)
@@ -91,7 +93,7 @@ appendToHistory sel history' = do
       let imgHash = show $ hash bytes
       let imgPath = toS $ cachePth <> "/" <> imgHash <> extension
       _ <- liftIO $ writeImage imgPath bytes
-      appendGeneric (sel {Clip.selection = imgCtr $ toS imgHash}) history'
+      appendGeneric (sel {Clip.selection = imgCtr $ encodeUtf8 imgHash}) history'
 
     writeImage path bytes = do
       fileExist <- Dir.doesFileExist path
@@ -173,14 +175,14 @@ runDaemon = prepareDirs >> setHistoryFilePermission >> (forever $ go `catchAll` 
     getSelectionFrom :: IO (Maybe Clip.Selection) -> IO (Maybe Clip.Selection)
     getSelectionFrom = fmap join . timeout _5sec
 
-    purgeSelection (Clip.Selection _ (Clip.PNG txt)) = purge (toS txt <> ".png")
-    purgeSelection (Clip.Selection _ (Clip.JPEG txt)) = purge (toS txt <> ".jpeg")
-    purgeSelection (Clip.Selection _ (Clip.BITMAP txt)) = purge (toS txt <> ".bmp")
+    purgeSelection (Clip.Selection _ (Clip.PNG txt)) = purge (decodeUtf8 txt <> ".png")
+    purgeSelection (Clip.Selection _ (Clip.JPEG txt)) = purge (decodeUtf8 txt <> ".jpeg")
+    purgeSelection (Clip.Selection _ (Clip.BITMAP txt)) = purge (decodeUtf8 txt <> ".bmp")
     purgeSelection _ = return ()
 
     purge path = do
       cachePth <- view (to imageCachePath)
-      liftIO $ Dir.removeFile (toS $ cachePth <> "/" <> path) `catchAll` const mempty
+      liftIO $ Dir.removeFile (T.unpack $ cachePth <> "/" <> path) `catchAll` const mempty
 
     handleError ex = do
       let displayMissing = "openDisplay" `T.isInfixOf` show ex
@@ -192,9 +194,9 @@ runDaemon = prepareDirs >> setHistoryFilePermission >> (forever $ go `catchAll` 
 
 toRofiStr :: Clip.Selection -> Text
 toRofiStr (Clip.Selection _ (Clip.UTF8 txt)) = T.map (\c -> if c == '\n' || c == '\r' then '\xA0' else c) txt
-toRofiStr (Clip.Selection appName (Clip.PNG txt)) = "image/png " <> appName <> " " <> toS txt
-toRofiStr (Clip.Selection appName (Clip.JPEG txt)) = "image/jpeg " <> appName <> " " <> toS txt
-toRofiStr (Clip.Selection appName (Clip.BITMAP txt)) = "image/bmp " <> appName <> " " <> toS txt
+toRofiStr (Clip.Selection appName (Clip.PNG txt)) = "image/png " <> appName <> " " <> decodeUtf8 txt
+toRofiStr (Clip.Selection appName (Clip.JPEG txt)) = "image/jpeg " <> appName <> " " <> decodeUtf8 txt
+toRofiStr (Clip.Selection appName (Clip.BITMAP txt)) = "image/bmp " <> appName <> " " <> decodeUtf8 txt
 
 fromRofiStr :: Text -> Text -> IO Clip.Selection
 fromRofiStr cachePth txt@(T.isPrefixOf "image/png " -> True) = B.readFile (toS $ cachePth <> "/" <> getHash txt <> ".png") <&> Clip.Selection "greenclip" . Clip.PNG
@@ -227,7 +229,7 @@ getConfig = do
 
   cfgStr <- readFile cfgPath `catchAll` const mempty
 
-  let unprettyCfg' = cfgStr & T.strip . T.replace "\n" "" . toS
+  let unprettyCfg' = cfgStr & T.strip . T.replace "\n" "" . decodeUtf8
   let unprettyCfg = if "trimSpaceFromSelection" `T.isInfixOf` unprettyCfg'
                       then unprettyCfg'
                       else T.replace "}" ", trimSpaceFromSelection = True }" unprettyCfg'
